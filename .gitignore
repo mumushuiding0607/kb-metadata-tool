@@ -1,0 +1,11 @@
+.env
+__pycache__/
+*.pyc
+data/checkpoints/
+data/logs/
+data/output/
+!data/checkpoints/.gitkeep
+!data/logs/.gitkeep
+!data/output/.gitkeep
+.DS_Store
+*.swp

@@ -1,0 +1,7 @@
+requests>=2.31.0
+PyYAML>=6.0
+python-dotenv>=1.0.0
+# 可选：本地模型推理（仅使用 local_qwen 时需要）
+# transformers>=4.40.0
+# torch>=2.0.0
+# vllm>=0.4.0  # 若 framework: vllm

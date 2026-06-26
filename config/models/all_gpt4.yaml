@@ -1,0 +1,24 @@
+# 模型路由：全部云端 GPT-4（备用配置，演示可插拔）
+filter_model:
+  type: minimax_pro
+  api_key_env: MINIMAX_API_KEY
+  model_name: MiniMax-M2.7
+  rpm_limit: 60
+  batch_size: 20
+  timeout_seconds: 30
+
+extractor_model:
+  type: minimax_pro
+  api_key_env: MINIMAX_API_KEY
+  model_name: MiniMax-M2.7
+  rpm_limit: 30
+  batch_size: 5
+  timeout_seconds: 30
+
+hyde_model:
+  type: minimax_pro
+  api_key_env: MINIMAX_API_KEY
+  model_name: MiniMax-M2.7
+  rpm_limit: 30
+  batch_size: 5
+  timeout_seconds: 30

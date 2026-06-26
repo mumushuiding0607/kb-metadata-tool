@@ -1,0 +1,24 @@
+# 模型路由：本地 Qwen 粗筛 + Minimax 精炼
+filter_model:
+  type: local_qwen
+  model_path: D:/models/Qwen2.5-1.5B-Instruct
+  device: cpu
+  framework: transformers
+  batch_size: 50
+  timeout_seconds: 60
+
+extractor_model:
+  type: minimax_pro
+  api_key_env: MINIMAX_API_KEY
+  model_name: MiniMax-M2.7
+  rpm_limit: 20
+  batch_size: 5
+  timeout_seconds: 30
+
+hyde_model:
+  type: minimax_pro
+  api_key_env: MINIMAX_API_KEY
+  model_name: MiniMax-M2.7
+  rpm_limit: 20
+  batch_size: 5
+  timeout_seconds: 30

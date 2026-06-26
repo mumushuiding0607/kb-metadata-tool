@@ -1,0 +1,13 @@
+{
+  "theme_name": "炒股",
+  "relevance_labels": ["direct", "inspirational", "unrelated"],
+  "dimensions": [
+    {"key": "market_phase", "desc": "市场阶段", "enum": ["00_盘前", "01_盘中", "02_盘后", "03_复盘", "04_长线"]},
+    {"key": "sector", "desc": "所属板块或题材"},
+    {"key": "signal_type", "desc": "信号类型", "enum": ["买入", "卖出", "观望", "风险提示"]},
+    {"key": "key_finding", "desc": "核心发现或数据"},
+    {"key": "actionable_advice", "desc": "可执行建议"}
+  ],
+  "density_threshold": 0.75,
+  "hyde_constraints": {"max_chars": 50, "min_chars": 8}
+}

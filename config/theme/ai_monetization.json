@@ -1,0 +1,13 @@
+{
+  "theme_name": "AI变现",
+  "relevance_labels": ["direct", "inspirational", "unrelated"],
+  "dimensions": [
+    {"key": "stage", "desc": "业务阶段", "enum": ["00_认知启发", "01_产品打造", "02_流量获取", "03_信任构建", "04_交付变现"]},
+    {"key": "niche", "desc": "细分赛道或应用场景"},
+    {"key": "pain_point", "desc": "解决用户的具体痛点"},
+    {"key": "core_method", "desc": "一句话概括核心心法"},
+    {"key": "actionable_step", "desc": "本周可尝试的落地动作"}
+  ],
+  "density_threshold": 0.7,
+  "hyde_constraints": {"max_chars": 50, "min_chars": 8}
+}
