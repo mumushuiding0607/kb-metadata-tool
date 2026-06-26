@@ -1,28 +1,22 @@
 """
 extractor_prompt.py - extractor 专属的 Prompt 构建与响应解析
-
-通用部分（retry / logger / model_interface）已抽到 common/。
 """
 
 import json
 import re
 
-from common.config_loader import ThemeConfig
+from common.config_loader import ThemeConfig, build_chunks_prompt
 
 
-def build_extract_prompt(theme: ThemeConfig, chunks: list[dict],
-                        template: str) -> str:
-    """构造 extractor 的 prompt。"""
-    from common.config_loader import load_prompt
-    template = load_prompt("step2_extract", theme=theme.name)
+def build_extract_prompt(theme: ThemeConfig, chunks: list[dict]) -> str:
+    """构造 extractor 的 prompt（注入维度列表）。"""
+    template = build_chunks_prompt("step2_extract", theme, chunks)
     dims_desc = "\n".join(
         f"- `{d['key']}`: {d['desc']}"
         + (f"（可选值: {d['enum']}）" if "enum" in d else "")
         for d in theme.dimensions
     )
-    template = template.replace("{dimensions}", dims_desc)
-    blocks = "\n\n".join(f"[{c['id']}]\n{c['text']}" for c in chunks)
-    return f"{template}\n\n---\n\n{blocks}"
+    return template.replace("{dimensions}", dims_desc)
 
 
 _JSON_BLOCK = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.MULTILINE)

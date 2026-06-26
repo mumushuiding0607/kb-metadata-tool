@@ -9,8 +9,8 @@ model_factory.py - 模型工厂（按配置实例化）
 """
 
 import os
-import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import requests
@@ -24,14 +24,14 @@ from common.token_bucket import get_bucket
 
 logger = get_logger("model_factory")
 
+_THINKING_TRUNC = 500  # thinking 块截断长度，避免干扰主输出
+
 
 # ---------------------------------------------------------------------------
 # Minimax 云端模型
 # ---------------------------------------------------------------------------
 class MinimaxModel:
     """调用 Minimax API（Anthropic Messages 协议）。"""
-
-    _THINKING_TRUNC = 500
 
     def __init__(self, entry: ModelEntry):
         api_key = os.environ.get(entry.extra.get("api_key_env", "MINIMAX_API_KEY"), "")
@@ -49,6 +49,7 @@ class MinimaxModel:
         )
         self.api_key = api_key
         self.timeout = entry.timeout
+        self.rpm_limit = entry.rpm_limit
         self._bucket = get_bucket(entry.rpm_limit) if entry.rpm_limit > 0 else None
 
     def _call(self, prompt: str) -> ModelResponse:
@@ -85,8 +86,13 @@ class MinimaxModel:
         return self._call(prompt)
 
     def batch_generate(self, prompts: list[str], timeout: int = 30) -> list[ModelResponse]:
-        # 串行执行，限流已在 _call 内部处理
-        return [self._call(p) for p in prompts]
+        # 并发受 rpm_limit 约束：每秒最多 rpm_limit/60 个请求，因此 max_workers
+        # 取 rpm_limit/12（小批量内允许瞬时并发，长时间由令牌桶节流）。
+        if len(prompts) <= 1 or self.rpm_limit <= 0:
+            return [self._call(p) for p in prompts]
+        max_workers = max(1, min(len(prompts), self.rpm_limit // 12 or 1))
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            return list(pool.map(self._call, prompts))
 
 
 def _parse_anthropic_response(data: dict, latency: int) -> ModelResponse:
@@ -98,7 +104,7 @@ def _parse_anthropic_response(data: dict, latency: int) -> ModelResponse:
         if btype == "text":
             text_parts.append(block.get("text", ""))
         elif btype == "thinking":
-            text_parts.append(block.get("thinking", "")[:MinimaxModel._THINKING_TRUNC])
+            text_parts.append(block.get("thinking", "")[:_THINKING_TRUNC])
     usage = data.get("usage", {})
     return ModelResponse(
         text="\n".join(text_parts),
@@ -123,6 +129,7 @@ class LocalQwenModel:
             raise RuntimeError("local_qwen 模型需要 extra.model_path")
         self._model = None
         self._tokenizer = None
+        self._torch = None  # 仅 transformers 后端需要
         self._load()
 
     def _load(self) -> None:
@@ -131,8 +138,9 @@ class LocalQwenModel:
             self._model = LLM(model=self.model_path, dtype="float16")
             logger.info("vllm 模型加载完成: %s", self.model_path)
         else:
-            from transformers import AutoModelForCausalLM, AutoTokenizer
             import torch
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+            self._torch = torch
             self._tokenizer = AutoTokenizer.from_pretrained(self.model_path)
             dtype = torch.float16 if self.device == "cuda" else torch.float32
             self._model = AutoModelForCausalLM.from_pretrained(
@@ -145,11 +153,13 @@ class LocalQwenModel:
         if self.framework == "vllm":
             outputs = self._model.generate(prompts, use_tqdm=False)
             return [o.outputs[0].text for o in outputs]
+        assert self._torch is not None and self._tokenizer is not None
         results: list[str] = []
         for i in range(0, len(prompts), self.batch_size):
             batch = prompts[i:i + self.batch_size]
-            inputs = self._tokenizer(batch, return_tensors="pt", padding=True).to(self.device)
-            with __import__("torch").no_grad():
+            inputs = self._tokenizer(batch, return_tensors="pt",
+                                     padding=True).to(self.device)
+            with self._torch.no_grad():
                 out = self._model.generate(**inputs, max_new_tokens=512)
             for j, prompt in enumerate(batch):
                 gen = out[j][inputs["input_ids"].shape[1]:]

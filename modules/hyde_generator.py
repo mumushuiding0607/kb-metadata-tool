@@ -14,9 +14,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from common import file_utils
+from common.batch_runner import run_pipeline
 from common.config_loader import (
     CHECKPOINT_DIR, ModelConfig, ThemeConfig,
-    load_models, load_prompt, load_theme,
+    build_chunks_prompt, load_models, load_theme,
 )
 from common.logger import get_logger
 from common.model_factory import create_model
@@ -31,13 +32,9 @@ EXTRACTED_PATH = CHECKPOINT_DIR / "03_extracted.jsonl"
 
 
 def _build_prompt(theme: ThemeConfig, chunks: list[dict]) -> str:
-    template = load_prompt(
-        "step3_hyde",
-        theme=theme.name,
-        max_chars=theme.hyde_max_chars,
+    return build_chunks_prompt(
+        "step3_hyde", theme, chunks, max_chars=theme.hyde_max_chars,
     )
-    blocks = "\n\n".join(f"[{c['id']}]\n{c['text']}" for c in chunks)
-    return f"{template}\n\n---\n\n{blocks}"
 
 
 def _parse_hyde(raw: str, expected_ids: list[str]) -> dict[str, str]:
@@ -67,8 +64,8 @@ def _process_batch(model, theme: ThemeConfig, batch: list[dict]) -> dict[str, st
 
 
 def _load_qualified(theme: ThemeConfig) -> list[dict]:
-    records = list(file_utils.read_jsonl(EXTRACTED_PATH))
-    return [r for r in records if r.get("density_score", 0) >= theme.density_threshold]
+    return [r for r in file_utils.read_jsonl(EXTRACTED_PATH)
+            if r.get("density_score", 0) >= theme.density_threshold]
 
 
 def run(theme: ThemeConfig | None = None,
@@ -81,45 +78,30 @@ def run(theme: ThemeConfig | None = None,
     model = create_model(models.hyde_model)
 
     chunks = _load_qualified(theme)
-    logger.info("高质量块数: %d", len(chunks))
-    if not chunks:
-        return
 
-    completed = file_utils.read_completed_ids(HYDE_PATH) \
-        | file_utils.read_completed_ids(HYDE_PENDING_PATH)
-    pending = [c for c in chunks if c["id"] not in completed]
-    logger.info("已完成 %d，待处理 %d", len(completed), len(pending))
-    if not pending:
-        return
+    def _build_success(chunk: dict, result: dict) -> dict:
+        return {
+            "id": chunk["id"],
+            "hyde": result if isinstance(result, str) else result.get("hyde", ""),
+            "density_score": chunk.get("density_score", 0),
+        }
 
-    batch_size = models.hyde_model.batch_size
-    for i in range(0, len(pending), batch_size):
-        batch = pending[i:i + batch_size]
-        ids = [c["id"] for c in batch]
-        try:
-            results = _process_batch(model, theme, batch)
-        except Exception as e:
-            logger.error("hyde 批次失败 ids=%s: %s", ids, e)
-            for c in batch:
-                file_utils.append_jsonl(HYDE_PENDING_PATH, {
-                    "id": c["id"], "text": c["text"], "reason": str(e),
-                })
-            continue
-        for c in batch:
-            q = results.get(c["id"], "")
-            if not q:
-                file_utils.append_jsonl(HYDE_PENDING_PATH, {
-                    "id": c["id"], "text": c["text"], "reason": "missing",
-                })
-                continue
-            file_utils.append_jsonl(HYDE_PATH, {
-                "id": c["id"],
-                "hyde": q,
-                "density_score": c.get("density_score", 0),
-            })
-        logger.info("hyde 进度 %d/%d", min(i + batch_size, len(pending)), len(pending))
+    def _build_pending(chunk: dict, reason: str) -> dict:
+        return {"id": chunk["id"], "text": chunk["text"], "reason": reason}
 
-    logger.info("hyde 完成")
+    def _process_fn(batch: list[dict]) -> dict[str, str]:
+        return _process_batch(model, theme, batch)
+
+    run_pipeline(
+        chunks,
+        process_batch=_process_fn,
+        success_path=HYDE_PATH,
+        pending_path=HYDE_PENDING_PATH,
+        build_success=_build_success,
+        build_pending=_build_pending,
+        batch_size=models.hyde_model.batch_size,
+        description="hyde",
+    )
 
 
 if __name__ == "__main__":

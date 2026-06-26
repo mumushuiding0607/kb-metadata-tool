@@ -13,12 +13,14 @@ from typing import Iterator
 
 
 def read_jsonl(path: str | Path) -> Iterator[dict]:
-    """流式读取 JSONL 文件，跳过空行/损坏行。"""
+    """流式读取 JSONL 文件，跳过空行/损坏行。文件不存在返回空迭代器。"""
     p = Path(path)
-    if not p.exists():
+    try:
+        f = p.open("r", encoding="utf-8")
+    except FileNotFoundError:
         return
-    with p.open("r", encoding="utf-8") as f:
-        for line_no, line in enumerate(f, 1):
+    with f:
+        for line in f:
             line = line.strip()
             if not line:
                 continue
@@ -54,10 +56,11 @@ def read_completed_ids(path: str | Path, id_field: str = "id") -> set[str]:
 def read_json(path: str | Path) -> dict | list | None:
     """读取单对象 JSON 文件，不存在返回 None。"""
     p = Path(path)
-    if not p.exists():
+    try:
+        with p.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
         return None
-    with p.open("r", encoding="utf-8") as f:
-        return json.load(f)
 
 
 def write_json(path: str | Path, data) -> None:

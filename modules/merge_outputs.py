@@ -5,7 +5,8 @@ merge_outputs.py - 合并各 checkpoint 输出最终结果
 1. 基础数据来自 02_filtered.jsonl
 2. 用 03_extracted.jsonl 覆盖 metadata 和 density_score
 3. 用 04_hyde.jsonl 追加 hyde 字段
-4. 输出 05_final_output.json（含全量）+ 05_final_output.jsonl（流式版）
+4. 过滤掉 relevance == 'unrelated'（不参与后续 embedding）
+5. 输出 05_final_output.json + 05_final_output.jsonl
 """
 
 import sys
@@ -15,8 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from common import file_utils
 from common.config_loader import (
-    CHECKPOINT_DIR, OUTPUT_DIR, ModelConfig, ThemeConfig,
-    load_models, load_theme,
+    CHECKPOINT_DIR, OUTPUT_DIR, ModelConfig, ThemeConfig, load_theme,
 )
 from common.logger import get_logger
 
@@ -29,26 +29,24 @@ JSON_OUTPUT = OUTPUT_DIR / "05_final_output.json"
 JSONL_OUTPUT = OUTPUT_DIR / "05_final_output.jsonl"
 
 
-def _index_by_id(records, key="id"):
-    return {r[key]: r for r in records if key in r}
+def _index_by_id(records) -> dict:
+    return {r["id"]: r for r in records if "id" in r}
 
 
 def run(theme: ThemeConfig | None = None,
         models: ModelConfig | None = None) -> None:
     theme = theme or load_theme()
-    load_models()  # 校验配置可加载
 
     logger.info("merge 启动")
-    filtered = list(file_utils.read_jsonl(FILTERED_PATH))
     extracted = _index_by_id(file_utils.read_jsonl(EXTRACTED_PATH))
     hyde = _index_by_id(file_utils.read_jsonl(HYDE_PATH))
+    filtered = list(file_utils.read_jsonl(FILTERED_PATH))
 
     final: list[dict] = []
     dropped_unrelated = 0
     for rec in filtered:
         cid = rec["id"]
         relevance = rec.get("relevance")
-        # unrelated 块直接过滤掉，不参与后续 embedding
         if relevance == "unrelated":
             dropped_unrelated += 1
             continue
@@ -60,9 +58,7 @@ def run(theme: ThemeConfig | None = None,
             "density_score": rec.get("density_score", 0.0),
             "metadata": {},
             "hyde": None,
-            "model_versions": {
-                "theme": theme.name,
-            },
+            "model_versions": {"theme": theme.name},
         }
         if cid in extracted:
             ext = extracted[cid]
@@ -76,7 +72,8 @@ def run(theme: ThemeConfig | None = None,
     file_utils.write_json(JSON_OUTPUT, final)
     file_utils.write_jsonl(JSONL_OUTPUT, final)
     logger.info("merge 完成: 输入 %d，过滤 unrelated %d，最终 %d → %s, %s",
-                len(filtered), dropped_unrelated, len(final), JSON_OUTPUT, JSONL_OUTPUT)
+                len(filtered), dropped_unrelated, len(final),
+                JSON_OUTPUT, JSONL_OUTPUT)
 
 
 if __name__ == "__main__":

@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from common import file_utils
 from common.config_loader import (
     CHECKPOINT_DIR, ModelConfig, ThemeConfig,
-    load_models, load_prompt, load_theme, resolve_input_path,
+    build_chunks_prompt, load_models, load_theme, resolve_input_path,
 )
 from common.logger import get_logger
 from common.model_factory import create_model
@@ -38,11 +38,7 @@ OUTPUT_PATH = CHECKPOINT_DIR / "02_filtered.jsonl"
 # Prompt 构建
 # ---------------------------------------------------------------------------
 def _build_prompt(theme: ThemeConfig, chunks: list[dict]) -> str:
-    template = load_prompt("step1_filter", theme=theme.name)
-    blocks = "\n\n".join(
-        f"[{c['id']}]\n{c['text']}" for c in chunks
-    )
-    return f"{template}\n\n---\n\n{blocks}"
+    return build_chunks_prompt("step1_filter", theme, chunks)
 
 
 # ---------------------------------------------------------------------------

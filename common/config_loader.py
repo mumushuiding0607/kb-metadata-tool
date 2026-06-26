@@ -120,6 +120,14 @@ def load_prompt(name: str, **vars) -> str:
     return text
 
 
+def build_chunks_prompt(template_name: str, theme: ThemeConfig,
+                        chunks: list[dict], **vars) -> str:
+    """加载模板、注入主题名+额外变量、追加 [id]\\ntext 形式的 chunks 块。"""
+    template = load_prompt(template_name, theme=theme.name, **vars)
+    blocks = "\n\n".join(f"[{c['id']}]\n{c['text']}" for c in chunks)
+    return f"{template}\n\n---\n\n{blocks}"
+
+
 # ---------------------------------------------------------------------------
 # CLI / 环境变量辅助
 # ---------------------------------------------------------------------------
