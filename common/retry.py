@@ -25,6 +25,7 @@ def with_retry(fn: Callable[[], T],
         description: 用于日志的描述
     """
     delays = delays or [5, 10]
+    desc = description or "操作"
     last_err: Exception | None = None
     for attempt in range(len(delays) + 1):
         try:
@@ -33,7 +34,12 @@ def with_retry(fn: Callable[[], T],
             last_err = e
             if attempt < len(delays):
                 wait = delays[attempt]
-                logger.warning("%s 第 %d 次重试（等 %ds）: %s",
-                               description or "操作", attempt + 1, wait, e)
+                logger.warning(
+                    "llm_retry desc=%s attempt=%d/%d wait=%ds err_type=%s err=%s",
+                    desc, attempt + 1, len(delays) + 1, wait,
+                    type(e).__name__, e,
+                )
                 time.sleep(wait)
-    raise TransientError(f"{description} 重试 {len(delays) + 1} 次仍失败: {last_err}")
+    logger.error("llm_retry_exhausted desc=%s attempts=%d last_err=%s",
+                 desc, len(delays) + 1, last_err)
+    raise TransientError(f"{desc} 重试 {len(delays) + 1} 次仍失败: {last_err}")

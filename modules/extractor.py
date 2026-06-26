@@ -1,16 +1,12 @@
 """
 extractor.py - 第二步：高级模型精炼
 
-输入：02_filtered.jsonl 中 density_score < 0 的块（待精炼）
+输入：run_dir/02_filtered.jsonl（filter 已剔除 unrelated）
 输出：
-  - 03_extracted.jsonl：成功批次（含元数据 + density_score）
-  - 03_pending.jsonl：失败批次（待下次重试）
+  - run_dir/03_extracted.jsonl：成功批次
+  - run_dir/03_pending.jsonl：失败批次
 
-工程参数：
-- batch_size = 5
-- 无 max_tokens（用 timeout=30 控制）
-- 重试 2 次：5s、10s 指数退避（通过 common.retry.with_retry）
-- 失败入 pending，不污染主数据
+工程参数：batch_size=5、无 max_tokens、30s 超时、with_retry 5s/10s。
 """
 
 import sys
@@ -21,7 +17,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from common import file_utils
 from common.batch_runner import run_pipeline
 from common.config_loader import (
-    CHECKPOINT_DIR, ModelConfig, ThemeConfig, load_models, load_theme,
+    ModelConfig, RunPaths, ThemeConfig,
+    derive_run_dir, load_models, load_theme,
 )
 from common.logger import get_logger
 from common.model_factory import create_model
@@ -31,13 +28,8 @@ from modules.extractor_prompt import build_extract_prompt, parse_extract_respons
 
 logger = get_logger("extractor")
 
-EXTRACTED_PATH = CHECKPOINT_DIR / "03_extracted.jsonl"
-PENDING_PATH = CHECKPOINT_DIR / "03_pending.jsonl"
-INPUT_PATH = CHECKPOINT_DIR / "02_filtered.jsonl"
-
 
 def _process_batch(model, theme: ThemeConfig, batch: list[dict]) -> dict[str, dict]:
-    """处理单个批次，返回 {id: result_dict}；失败抛 TransientError。"""
     ids = [c["id"] for c in batch]
     prompt = build_extract_prompt(theme, batch)
 
@@ -51,21 +43,33 @@ def _process_batch(model, theme: ThemeConfig, batch: list[dict]) -> dict[str, di
     return with_retry(_do_call, description=f"extractor batch(ids={ids[:2]}...)")
 
 
-def _load_pending_chunks() -> list[dict]:
-    """从 02_filtered.jsonl 加载 density_score < 0 的块（待精炼）。"""
-    return [r for r in file_utils.read_jsonl(INPUT_PATH)
-            if r.get("density_score", -1) < 0]
+def _load_chunks(paths: RunPaths) -> list[dict]:
+    return list(file_utils.read_jsonl(paths.filtered))
 
 
 def run(theme: ThemeConfig | None = None,
-        models: ModelConfig | None = None) -> None:
+        models: ModelConfig | None = None,
+        input_path: str | Path | None = None,
+        run_dir: str | Path | None = None) -> RunPaths:
     theme = theme or load_theme()
     models = models or load_models()
 
-    logger.info("extractor 启动: theme=%s", theme.name)
-    model = create_model(models.extractor_model)
+    if run_dir is None:
+        if input_path is None:
+            raise ValueError("extractor 需要 input_path 或 run_dir")
+        run_dir = derive_run_dir(input_path)
+    paths = RunPaths.for_run_dir(run_dir)
 
-    chunks = _load_pending_chunks()
+    if not paths.filtered.exists():
+        raise FileNotFoundError(
+            f"未找到 filter 输出: {paths.filtered}，请先执行 filter 步骤"
+        )
+
+    logger.info("extractor 启动: theme=%s, run_dir=%s", theme.name, paths.run_dir)
+    chunks = _load_chunks(paths)
+    logger.info("待精炼块数: %d", len(chunks))
+
+    model = create_model(models.extractor_model)
     dim_keys = [d["key"] for d in theme.dimensions]
 
     def _build_success(chunk: dict, result: dict) -> dict:
@@ -85,13 +89,14 @@ def run(theme: ThemeConfig | None = None,
     run_pipeline(
         chunks,
         process_batch=_process_fn,
-        success_path=EXTRACTED_PATH,
-        pending_path=PENDING_PATH,
+        success_path=paths.extracted,
+        pending_path=paths.extracted_pending,
         build_success=_build_success,
         build_pending=_build_pending,
         batch_size=models.extractor_model.batch_size,
         description="extractor",
     )
+    return paths
 
 
 if __name__ == "__main__":

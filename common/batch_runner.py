@@ -52,13 +52,17 @@ def run_pipeline(
         return 0, 0
 
     success_count = fail_count = 0
+    skipped_count = 0
     for i in range(0, len(pending), batch_size):
         batch = pending[i:i + batch_size]
         ids = [c["id"] for c in batch]
+        logger.debug("batch_call desc=%s idx=%d size=%d ids=%s",
+                     description, i, len(batch), ids[:3])
         try:
             results = process_batch(batch)
         except Exception as e:
-            logger.error("%s 批次失败 ids=%s: %s", description, ids, e)
+            logger.error("%s batch_failed ids=%s err_type=%s err=%s",
+                         description, ids, type(e).__name__, e)
             for c in batch:
                 file_utils.append_jsonl(pending_path, build_pending(c, str(e)))
             fail_count += len(batch)
@@ -70,10 +74,18 @@ def run_pipeline(
                 file_utils.append_jsonl(pending_path, build_pending(c, "missing"))
                 fail_count += 1
                 continue
-            file_utils.append_jsonl(success_path, build_success(c, r))
+            # build_success 返回 None 表示跳过（例如 filter 丢弃 unrelated）
+            success_record = build_success(c, r)
+            if success_record is None:
+                skipped_count += 1
+                continue
+            file_utils.append_jsonl(success_path, success_record)
             success_count += 1
         logger.info("%s 进度 %d/%d", description,
                     min(i + batch_size, len(pending)), len(pending))
+
+    logger.info("%s 完成: 成功 %d，跳过 %d，失败 %d",
+                description, success_count, skipped_count, fail_count)
 
     logger.info("%s 完成: 成功 %d，失败 %d",
                 description, success_count, fail_count)

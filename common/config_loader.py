@@ -6,6 +6,7 @@ config_loader.py - 配置加载与校验
 - 模型配置（YAML）：模型类型、限流、批次大小
 - Prompt 模板（Markdown）：动态注入主题名等变量
 - CLI > 环境变量 > 默认值 优先级
+- 每个输入文件对应一个 run_dir，所有产物集中存放
 
 业务模块只能通过 load_*() 函数获取配置，不自行解析文件。
 """
@@ -26,6 +27,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CONFIG_DIR = ROOT / "config"
 DATA_DIR = ROOT / "data"
 INPUT_DIR = DATA_DIR / "input"
+# 兼容旧代码：仍导出 CHECKPOINT_DIR / OUTPUT_DIR，但默认产物改落到 run_dir
 CHECKPOINT_DIR = DATA_DIR / "checkpoints"
 OUTPUT_DIR = DATA_DIR / "output"
 
@@ -47,6 +49,36 @@ class ModelConfig:
     filter_model: ModelEntry
     extractor_model: ModelEntry
     hyde_model: ModelEntry
+
+
+@dataclass
+class RunPaths:
+    """单个 input 文件对应的运行目录所有路径。"""
+    run_dir: Path
+    filtered: Path
+    filtered_pending: Path
+    extracted: Path
+    extracted_pending: Path
+    hyde: Path
+    hyde_pending: Path
+    final_json: Path
+    final_jsonl: Path
+
+    @classmethod
+    def for_run_dir(cls, run_dir: str | Path) -> "RunPaths":
+        run_dir = Path(run_dir)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        return cls(
+            run_dir=run_dir,
+            filtered=run_dir / "02_filtered.jsonl",
+            filtered_pending=run_dir / "02_pending.jsonl",
+            extracted=run_dir / "03_extracted.jsonl",
+            extracted_pending=run_dir / "03_pending.jsonl",
+            hyde=run_dir / "04_hyde.jsonl",
+            hyde_pending=run_dir / "04_pending.jsonl",
+            final_json=run_dir / "05_final_output.json",
+            final_jsonl=run_dir / "05_final_output.jsonl",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -136,3 +168,32 @@ def resolve_input_path(path: str | Path | None = None) -> Path:
     if not p.exists():
         raise FileNotFoundError(f"输入文件不存在: {p}")
     return p
+
+
+# data/ 下作为运行目录的子目录（不是中间产物）
+_RUN_DIR_RESERVED = {"input", "checkpoints", "output", "logs"}
+
+
+def derive_run_dir(input_path: str | Path) -> Path:
+    """从任意输入路径推导 run_dir。
+
+    规则：
+    - 路径本身就是 data/<X>/<file>：若 X 不是保留目录，run_dir = data/<X>/
+      （例如 data/foo/02_filtered.jsonl → data/foo/）
+    - 路径在 data/<X>/file 但 X 是保留目录：run_dir = data/<stem>/
+      （例如 data/input/foo.json → data/foo/）
+    - 其它位置：run_dir = data/<stem>/
+    """
+    p = Path(input_path).resolve()
+    if p.is_dir():
+        return p
+
+    parent = p.parent
+    try:
+        rel_parent = parent.relative_to(DATA_DIR.resolve())
+    except ValueError:
+        return DATA_DIR / p.stem
+
+    if len(rel_parent.parts) == 1 and rel_parent.parts[0] not in _RUN_DIR_RESERVED:
+        return parent
+    return DATA_DIR / p.stem
