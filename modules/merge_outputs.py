@@ -44,12 +44,18 @@ def run(theme: ThemeConfig | None = None,
     hyde = _index_by_id(file_utils.read_jsonl(HYDE_PATH))
 
     final: list[dict] = []
+    dropped_unrelated = 0
     for rec in filtered:
         cid = rec["id"]
+        relevance = rec.get("relevance")
+        # unrelated 块直接过滤掉，不参与后续 embedding
+        if relevance == "unrelated":
+            dropped_unrelated += 1
+            continue
         out = {
             "id": cid,
             "text": rec.get("text", ""),
-            "relevance": rec.get("relevance"),
+            "relevance": relevance,
             "rough_density": rec.get("rough_density"),
             "density_score": rec.get("density_score", 0.0),
             "metadata": {},
@@ -69,7 +75,8 @@ def run(theme: ThemeConfig | None = None,
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     file_utils.write_json(JSON_OUTPUT, final)
     file_utils.write_jsonl(JSONL_OUTPUT, final)
-    logger.info("merge 完成: %d 条 → %s, %s", len(final), JSON_OUTPUT, JSONL_OUTPUT)
+    logger.info("merge 完成: 输入 %d，过滤 unrelated %d，最终 %d → %s, %s",
+                len(filtered), dropped_unrelated, len(final), JSON_OUTPUT, JSONL_OUTPUT)
 
 
 if __name__ == "__main__":
