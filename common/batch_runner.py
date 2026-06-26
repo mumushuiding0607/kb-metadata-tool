@@ -4,6 +4,7 @@ batch_runner.py - 通用批处理编排器
 业务模块只调用 run_pipeline()，不重复实现 pending/batch loop 骨架。
 """
 
+from itertools import chain
 from pathlib import Path
 from typing import Callable
 
@@ -31,7 +32,7 @@ def run_pipeline(
         process_batch: 输入一批，返回 {id: result_dict}；失败抛异常
         success_path: 成功结果写入此 JSONL
         pending_path: 失败批次写入此 JSONL
-        build_success: (chunk, result_dict) → success record
+        build_success: (chunk, result_dict) → success record（返回 None 表示跳过）
         build_pending: (chunk, reason) → pending record
         batch_size: 每批大小
         description: 用于日志描述
@@ -43,8 +44,11 @@ def run_pipeline(
         logger.info("%s 无待处理块，退出", description or "pipeline")
         return 0, 0
 
-    completed = file_utils.read_completed_ids(success_path) \
-        | file_utils.read_completed_ids(pending_path)
+    completed: set[str] = set()
+    for r in chain(file_utils.read_jsonl(success_path),
+                   file_utils.read_jsonl(pending_path)):
+        if "id" in r:
+            completed.add(r["id"])
     pending = [c for c in chunks if c["id"] not in completed]
     logger.info("%s 已完成 %d，跳过；待处理 %d",
                 description, len(completed), len(pending))
@@ -86,7 +90,4 @@ def run_pipeline(
 
     logger.info("%s 完成: 成功 %d，跳过 %d，失败 %d",
                 description, success_count, skipped_count, fail_count)
-
-    logger.info("%s 完成: 成功 %d，失败 %d",
-                description, success_count, fail_count)
     return success_count, fail_count

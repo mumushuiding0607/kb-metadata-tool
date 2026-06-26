@@ -16,14 +16,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from common import file_utils
 from common.batch_runner import run_pipeline
-from common.config_loader import (
-    ModelConfig, RunPaths, ThemeConfig,
-    derive_run_dir, load_models, load_theme,
-)
+from common.config_loader import ModelConfig, RunPaths, ThemeConfig
 from common.logger import get_logger
 from common.model_factory import create_model
 from common.model_interface import TransientError
 from common.retry import with_retry
+from common.run_context import setup_run
 from modules.extractor_prompt import build_extract_prompt, parse_extract_response
 
 logger = get_logger("extractor")
@@ -43,34 +41,24 @@ def _process_batch(model, theme: ThemeConfig, batch: list[dict]) -> dict[str, di
     return with_retry(_do_call, description=f"extractor batch(ids={ids[:2]}...)")
 
 
-def _load_chunks(paths: RunPaths) -> list[dict]:
-    return list(file_utils.read_jsonl(paths.filtered))
-
-
 def run(theme: ThemeConfig | None = None,
         models: ModelConfig | None = None,
         input_path: str | Path | None = None,
         run_dir: str | Path | None = None) -> RunPaths:
-    theme = theme or load_theme()
-    models = models or load_models()
+    ctx = setup_run("extractor", theme=theme, models=models,
+                    input_path=input_path, run_dir=run_dir)
 
-    if run_dir is None:
-        if input_path is None:
-            raise ValueError("extractor 需要 input_path 或 run_dir")
-        run_dir = derive_run_dir(input_path)
-    paths = RunPaths.for_run_dir(run_dir)
-
-    if not paths.filtered.exists():
+    if not ctx.paths.filtered.exists():
         raise FileNotFoundError(
-            f"未找到 filter 输出: {paths.filtered}，请先执行 filter 步骤"
+            f"未找到 filter 输出: {ctx.paths.filtered}，请先执行 filter 步骤"
         )
 
-    logger.info("extractor 启动: theme=%s, run_dir=%s", theme.name, paths.run_dir)
-    chunks = _load_chunks(paths)
+    logger.info("extractor 启动: theme=%s, run_dir=%s", ctx.theme.name, ctx.paths.run_dir)
+    chunks = list(file_utils.read_jsonl(ctx.paths.filtered))
     logger.info("待精炼块数: %d", len(chunks))
 
-    model = create_model(models.extractor_model)
-    dim_keys = [d["key"] for d in theme.dimensions]
+    model = create_model(ctx.models.extractor_model)
+    dim_keys = [d["key"] for d in ctx.theme.dimensions]
 
     def _build_success(chunk: dict, result: dict) -> dict:
         return {
@@ -84,19 +72,19 @@ def run(theme: ThemeConfig | None = None,
         return {"id": chunk["id"], "text": chunk["text"], "reason": reason}
 
     def _process_fn(batch: list[dict]) -> dict[str, dict]:
-        return _process_batch(model, theme, batch)
+        return _process_batch(model, ctx.theme, batch)
 
     run_pipeline(
         chunks,
         process_batch=_process_fn,
-        success_path=paths.extracted,
-        pending_path=paths.extracted_pending,
+        success_path=ctx.paths.extracted,
+        pending_path=ctx.paths.extracted_pending,
         build_success=_build_success,
         build_pending=_build_pending,
-        batch_size=models.extractor_model.batch_size,
+        batch_size=ctx.models.extractor_model.batch_size,
         description="extractor",
     )
-    return paths
+    return ctx.paths
 
 
 if __name__ == "__main__":

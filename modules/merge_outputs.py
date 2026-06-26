@@ -15,9 +15,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from common import file_utils
 from common.config_loader import (
-    ModelConfig, RunPaths, ThemeConfig, derive_run_dir, load_theme,
+    ModelConfig, RunPaths, ThemeConfig,
 )
 from common.logger import get_logger
+from common.run_context import setup_run
 
 logger = get_logger("merge")
 
@@ -30,18 +31,13 @@ def run(theme: ThemeConfig | None = None,
         models: ModelConfig | None = None,
         input_path: str | Path | None = None,
         run_dir: str | Path | None = None) -> RunPaths:
-    theme = theme or load_theme()
+    ctx = setup_run("merge", theme=theme, models=models,
+                    input_path=input_path, run_dir=run_dir)
 
-    if run_dir is None:
-        if input_path is None:
-            raise ValueError("merge 需要 input_path 或 run_dir")
-        run_dir = derive_run_dir(input_path)
-    paths = RunPaths.for_run_dir(run_dir)
-
-    logger.info("merge 启动: run_dir=%s", paths.run_dir)
-    extracted = _index_by_id(file_utils.read_jsonl(paths.extracted))
-    hyde = _index_by_id(file_utils.read_jsonl(paths.hyde))
-    filtered = list(file_utils.read_jsonl(paths.filtered))
+    logger.info("merge 启动: run_dir=%s", ctx.paths.run_dir)
+    extracted = _index_by_id(file_utils.read_jsonl(ctx.paths.extracted))
+    hyde = _index_by_id(file_utils.read_jsonl(ctx.paths.hyde))
+    filtered = list(file_utils.read_jsonl(ctx.paths.filtered))
 
     final: list[dict] = []
     for rec in filtered:
@@ -54,7 +50,7 @@ def run(theme: ThemeConfig | None = None,
             "density_score": 0.0,
             "metadata": {},
             "hyde": None,
-            "model_versions": {"theme": theme.name},
+            "model_versions": {"theme": ctx.theme.name},
         }
         if cid in extracted:
             ext = extracted[cid]
@@ -64,11 +60,11 @@ def run(theme: ThemeConfig | None = None,
             out["hyde"] = hyde[cid].get("hyde")
         final.append(out)
 
-    file_utils.write_json(paths.final_json, final)
-    file_utils.write_jsonl(paths.final_jsonl, final)
+    file_utils.write_json(ctx.paths.final_json, final)
+    file_utils.write_jsonl(ctx.paths.final_jsonl, final)
     logger.info("merge 完成: 输入 %d → %s, %s",
-                len(final), paths.final_json, paths.final_jsonl)
-    return paths
+                len(final), ctx.paths.final_json, ctx.paths.final_jsonl)
+    return ctx.paths
 
 
 if __name__ == "__main__":

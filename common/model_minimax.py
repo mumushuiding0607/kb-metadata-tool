@@ -69,16 +69,15 @@ class MinimaxModel:
         try:
             resp = requests.post(url, headers=headers, json=payload,
                                  timeout=self.timeout)
-        except requests.Timeout as e:
+        except requests.RequestException as e:
             latency = int((time.monotonic() - start) * 1000)
-            logger.error("llm_call_timeout model=%s after=%dms timeout=%ds",
-                         self.model_name, latency, self.timeout)
-            raise TransientError(f"timeout after {self.timeout}s") from e
-        except requests.ConnectionError as e:
-            latency = int((time.monotonic() - start) * 1000)
-            logger.error("llm_call_connection_error model=%s after=%dms err=%s",
-                         self.model_name, latency, e)
-            raise TransientError(f"connection error: {e}") from e
+            if isinstance(e, requests.Timeout):
+                logger.error("llm_call_timeout model=%s after=%dms timeout=%ds",
+                             self.model_name, latency, self.timeout)
+                raise TransientError(f"timeout after {self.timeout}s") from e
+            logger.error("llm_call_request_error model=%s after=%dms err_type=%s err=%s",
+                         self.model_name, latency, type(e).__name__, e)
+            raise TransientError(f"{type(e).__name__}: {e}") from e
 
         latency = int((time.monotonic() - start) * 1000)
         if resp.status_code == 429 or resp.status_code >= 500:
@@ -110,13 +109,17 @@ class MinimaxModel:
         if len(prompts) <= 1 or self.rpm_limit <= 0:
             return [self._call(p) for p in prompts]
         max_workers = max(1, min(len(prompts), self.rpm_limit // 12 or 1))
+        # max_workers==1 时 ThreadPoolExecutor 是纯开销，直接顺序调用
+        if max_workers == 1:
+            logger.info("llm_batch_start model=%s n=%d sequential rpm_limit=%d",
+                        self.model_name, len(prompts), self.rpm_limit)
+            return [self._call(p) for p in prompts]
         logger.info("llm_batch_start model=%s n=%d max_workers=%d rpm_limit=%d",
                     self.model_name, len(prompts), max_workers, self.rpm_limit)
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             results = list(pool.map(self._call, prompts))
-        ok = sum(1 for r in results if r is not None)
-        logger.info("llm_batch_done model=%s n=%d ok=%d",
-                    self.model_name, len(prompts), ok)
+        logger.info("llm_batch_done model=%s n=%d",
+                    self.model_name, len(prompts))
         return results
 
 

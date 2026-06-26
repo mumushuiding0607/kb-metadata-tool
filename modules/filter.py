@@ -15,13 +15,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from common import file_utils
 from common.batch_runner import run_pipeline
 from common.config_loader import (
-    ModelConfig, RunPaths, ThemeConfig,
-    build_chunks_prompt, derive_run_dir, load_models, load_theme,
+    ModelConfig, RunPaths, ThemeConfig, build_chunks_prompt,
 )
 from common.logger import get_logger
 from common.model_factory import create_model
-from common.model_interface import TransientError
 from common.retry import with_retry
+from common.run_context import setup_run
 
 logger = get_logger("filter")
 
@@ -67,39 +66,30 @@ def _load_input_chunks(input_path: Path) -> list[dict]:
     return chunks
 
 
-def _build_paths(run_dir: Path) -> RunPaths:
-    return RunPaths.for_run_dir(run_dir)
-
-
 def run(theme: ThemeConfig | None = None,
         models: ModelConfig | None = None,
         input_path: str | Path | None = None,
         run_dir: str | Path | None = None) -> RunPaths:
-    theme = theme or load_theme()
-    models = models or load_models()
-
-    if run_dir is None:
-        if input_path is None:
-            raise ValueError("filter 需要 input_path 或 run_dir")
+    ctx = setup_run("filter", theme=theme, models=models,
+                    input_path=input_path, run_dir=run_dir)
+    if input_path is not None:
         input_path = Path(input_path)
         if not input_path.exists():
             raise FileNotFoundError(f"输入文件不存在: {input_path}")
-        run_dir = derive_run_dir(input_path)
-    paths = _build_paths(run_dir)
 
-    logger.info("filter 启动: theme=%s, run_dir=%s", theme.name, paths.run_dir)
+    logger.info("filter 启动: theme=%s, run_dir=%s", ctx.theme.name, ctx.paths.run_dir)
     if input_path is None:
-        # 仅给 run_dir 模式（重试场景）：从 raw_chunks 文件或 02_pending 恢复
-        pending_chunks = list(file_utils.read_jsonl(paths.filtered_pending))
+        # 仅给 run_dir 模式（重试场景）：从 02_pending 恢复
+        pending_chunks = list(file_utils.read_jsonl(ctx.paths.filtered_pending))
         if not pending_chunks:
             logger.info("filter 无 pending，退出")
-            return paths
+            return ctx.paths
         chunks = pending_chunks
     else:
-        chunks = _load_input_chunks(Path(input_path))
+        chunks = _load_input_chunks(input_path)
     logger.info("待处理块数: %d", len(chunks))
 
-    model = create_model(models.filter_model)
+    model = create_model(ctx.models.filter_model)
 
     def _build_success(chunk: dict, labels: dict) -> dict | None:
         # unrelated 直接丢弃（filter 的核心职责）
@@ -116,20 +106,20 @@ def run(theme: ThemeConfig | None = None,
         return {"id": chunk["id"], "text": chunk["text"], "reason": reason}
 
     def _process_fn(batch: list[dict]) -> dict[str, dict]:
-        return _process_batch(model, theme, batch)
+        return _process_batch(model, ctx.theme, batch)
 
     success, fail = run_pipeline(
         chunks,
         process_batch=_process_fn,
-        success_path=paths.filtered,
-        pending_path=paths.filtered_pending,
+        success_path=ctx.paths.filtered,
+        pending_path=ctx.paths.filtered_pending,
         build_success=_build_success,
         build_pending=_build_pending,
-        batch_size=models.filter_model.batch_size,
+        batch_size=ctx.models.filter_model.batch_size,
         description="filter",
     )
     logger.info("filter 完成: 通过 %d，丢弃/失败 %d", success, fail)
-    return paths
+    return ctx.paths
 
 
 if __name__ == "__main__":

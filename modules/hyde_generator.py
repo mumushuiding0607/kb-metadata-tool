@@ -16,13 +16,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from common import file_utils
 from common.batch_runner import run_pipeline
 from common.config_loader import (
-    ModelConfig, RunPaths, ThemeConfig,
-    build_chunks_prompt, derive_run_dir, load_models, load_theme,
+    ModelConfig, RunPaths, ThemeConfig, build_chunks_prompt,
 )
 from common.logger import get_logger
 from common.model_factory import create_model
 from common.model_interface import TransientError
 from common.retry import with_retry
+from common.run_context import setup_run
 
 logger = get_logger("hyde")
 
@@ -59,35 +59,25 @@ def _process_batch(model, theme: ThemeConfig, batch: list[dict]) -> dict[str, st
     return with_retry(_do_call, description=f"hyde batch(ids={ids[:2]}...)")
 
 
-def _load_qualified(paths: RunPaths, theme: ThemeConfig) -> list[dict]:
-    return [r for r in file_utils.read_jsonl(paths.extracted)
-            if r.get("density_score", 0) >= theme.density_threshold]
-
-
 def run(theme: ThemeConfig | None = None,
         models: ModelConfig | None = None,
         input_path: str | Path | None = None,
         run_dir: str | Path | None = None) -> RunPaths:
-    theme = theme or load_theme()
-    models = models or load_models()
+    ctx = setup_run("hyde", theme=theme, models=models,
+                    input_path=input_path, run_dir=run_dir)
 
-    if run_dir is None:
-        if input_path is None:
-            raise ValueError("hyde 需要 input_path 或 run_dir")
-        run_dir = derive_run_dir(input_path)
-    paths = RunPaths.for_run_dir(run_dir)
-
-    if not paths.extracted.exists():
+    if not ctx.paths.extracted.exists():
         raise FileNotFoundError(
-            f"未找到 extractor 输出: {paths.extracted}，请先执行 extractor 步骤"
+            f"未找到 extractor 输出: {ctx.paths.extracted}，请先执行 extractor 步骤"
         )
 
     logger.info("hyde 启动: theme=%s, threshold=%.2f, run_dir=%s",
-                theme.name, theme.density_threshold, paths.run_dir)
-    chunks = _load_qualified(paths, theme)
+                ctx.theme.name, ctx.theme.density_threshold, ctx.paths.run_dir)
+    chunks = [r for r in file_utils.read_jsonl(ctx.paths.extracted)
+              if r.get("density_score", 0) >= ctx.theme.density_threshold]
     logger.info("高质量块数: %d", len(chunks))
 
-    model = create_model(models.hyde_model)
+    model = create_model(ctx.models.hyde_model)
 
     def _build_success(chunk: dict, result: dict) -> dict:
         return {
@@ -100,19 +90,19 @@ def run(theme: ThemeConfig | None = None,
         return {"id": chunk["id"], "text": chunk["text"], "reason": reason}
 
     def _process_fn(batch: list[dict]) -> dict[str, str]:
-        return _process_batch(model, theme, batch)
+        return _process_batch(model, ctx.theme, batch)
 
     run_pipeline(
         chunks,
         process_batch=_process_fn,
-        success_path=paths.hyde,
-        pending_path=paths.hyde_pending,
+        success_path=ctx.paths.hyde,
+        pending_path=ctx.paths.hyde_pending,
         build_success=_build_success,
         build_pending=_build_pending,
-        batch_size=models.hyde_model.batch_size,
+        batch_size=ctx.models.hyde_model.batch_size,
         description="hyde",
     )
-    return paths
+    return ctx.paths
 
 
 if __name__ == "__main__":
